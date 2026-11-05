@@ -160,6 +160,7 @@ func (s *strct) Parse(ctx *parseContext, _ reflect.Value) (out []reflect.Value, 
 		// an enclosing struct's captures may still belong to a branch that gets dropped.
 		_ = ctx.ApplyFrom(applyStart)
 		ctx.MaybeUpdateError(err)
+		s.recordEvent(ctx, start, ctx.RawCursor())
 		return []reflect.Value{sv}, err
 	} else if out == nil {
 		// No match, so the queue is back at applyStart: nothing to apply.
@@ -169,6 +170,7 @@ func (s *strct) Parse(ctx *parseContext, _ reflect.Value) (out []reflect.Value, 
 	t = ctx.RawPeek()
 	s.maybeInjectEndToken(t, sv)
 	s.maybeInjectTokens(ctx.Range(start, end), sv)
+	s.recordEvent(ctx, start, end)
 	return []reflect.Value{sv}, ctx.ApplyFrom(applyStart)
 }
 
@@ -193,6 +195,15 @@ func (s *strct) maybeInjectTokens(tokens []lexer.Token, v reflect.Value) {
 		return
 	}
 	v.FieldByIndex(s.tokensFieldIndex).Set(reflect.ValueOf(tokens))
+}
+
+// recordEvent records an accepted struct production for incremental node
+// identity tracking. Events are only collected when a session requests them.
+func (s *strct) recordEvent(ctx *parseContext, start, end lexer.RawCursor) {
+	if ctx.eventSink == nil || end <= start {
+		return
+	}
+	ctx.events = append(ctx.events, nodeEvent{production: s.typ.Name(), start: start, end: end})
 }
 
 type groupMatchMode int

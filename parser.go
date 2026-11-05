@@ -169,7 +169,12 @@ func (p *Parser[G]) ParseFromLexer(lex *lexer.PeekingLexer, options ...ParseOpti
 		return nil, err
 	}
 	ctx := newParseContext(lex, p.lex, p.useLookahead, p.caseInsensitiveTokens)
-	defer func() { *lex = ctx.PeekingLexer }()
+	defer func() {
+		*lex = ctx.PeekingLexer
+		if ctx.eventSink != nil {
+			*ctx.eventSink = ctx.events
+		}
+	}()
 	for _, option := range options {
 		option(&ctx)
 	}

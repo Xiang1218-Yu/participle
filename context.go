@@ -16,6 +16,16 @@ type contextFieldSet struct {
 	fieldValue []reflect.Value
 }
 
+// nodeEvent records that a struct production was accepted over the given raw
+// token cursor range. It is used by incremental parsing sessions to assign
+// stable identities to AST nodes. Events follow the same branch lifecycle as
+// deferred field sets: they are only retained for accepted branches.
+type nodeEvent struct {
+	production string
+	start      lexer.RawCursor
+	end        lexer.RawCursor
+}
+
 // Context for a single parse.
 type parseContext struct {
 	lexer.PeekingLexer
@@ -27,7 +37,11 @@ type parseContext struct {
 	caseInsensitive   map[lexer.TokenType]bool
 	symbols           map[lexer.TokenType]string
 	apply             []*contextFieldSet
-	allowTrailing     bool
+	events            []nodeEvent
+	// eventSink, when non-nil, enables node event collection. After the parse
+	// completes the accepted events are copied into the slice it points at.
+	eventSink     *[]nodeEvent
+	allowTrailing bool
 }
 
 func newParseContext(lex *lexer.PeekingLexer, def lexer.Definition, lookahead int, caseInsensitive map[lexer.TokenType]bool) parseContext {
@@ -80,6 +94,7 @@ func (p *parseContext) ApplyFrom(start int) error {
 // Branch accepts the branch as the correct branch.
 func (p *parseContext) Accept(branch *parseContext) {
 	p.apply = append(p.apply, branch.apply...)
+	p.events = append(p.events, branch.events...)
 	p.PeekingLexer = branch.PeekingLexer
 	if branch.deepestErrorDepth >= p.deepestErrorDepth {
 		p.deepestErrorDepth = branch.deepestErrorDepth
@@ -92,6 +107,7 @@ func (p *parseContext) Branch() *parseContext {
 	branch := &parseContext{}
 	*branch = *p
 	branch.apply = nil
+	branch.events = nil
 	return branch
 }
 
