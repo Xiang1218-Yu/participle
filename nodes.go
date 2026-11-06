@@ -269,14 +269,20 @@ func (g *group) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Va
 		if err != nil {
 			ctx.MaybeUpdateError(err)
 			// Optional part failed to match.
-			if ctx.Stop(err, branch) {
+			stop, acceptErr := ctx.Stop(err, branch)
+			if stop {
 				out = append(out, v...) // Try to return as much of the parse tree as possible
+				if acceptErr != nil {
+					return out, acceptErr
+				}
 				return out, err
 			}
 			break
 		}
 		out = append(out, v...)
-		ctx.Accept(branch)
+		if err = ctx.Accept(branch); err != nil {
+			return out, err
+		}
 		if v == nil {
 			break
 		}
@@ -339,7 +345,11 @@ func (d *disjunction) Parse(ctx *parseContext, parent reflect.Value) (out []refl
 		branch := ctx.Branch()
 		if value, err := a.Parse(branch, parent); err != nil {
 			// If this branch progressed too far and still didn't match, error out.
-			if ctx.Stop(err, branch) {
+			stop, acceptErr := ctx.Stop(err, branch)
+			if stop {
+				if acceptErr != nil {
+					return value, acceptErr
+				}
 				return value, err
 			}
 			// Show the closest error returned. The idea here is that the further the parser progresses
@@ -355,7 +365,9 @@ func (d *disjunction) Parse(ctx *parseContext, parent reflect.Value) (out []refl
 			if bt == ct && bt.Type != lexer.EOF {
 				panic(Errorf(bt.Pos, "branch %s was accepted but did not progress the lexer at %s (%q)", a, bt.Pos, bt.Value))
 			}
-			ctx.Accept(branch)
+			if err := ctx.Accept(branch); err != nil {
+				return nil, err
+			}
 			return value, nil
 		}
 	}
@@ -411,10 +423,32 @@ type capture struct {
 func (c *capture) String() string   { return ebnf(c) }
 func (c *capture) GoString() string { return "capture{}" }
 
+// isCapturedProduction reports whether the capture assigns a nested
+// production (@@) rather than capturing tokens into a scalar field (@). Nested
+// productions introduce a new segment in field presence paths.
+func (c *capture) isCapturedProduction() bool {
+	switch c.node.(type) {
+	case *strct, *union, *custom, *parseable:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *capture) Parse(ctx *parseContext, parent reflect.Value) (out []reflect.Value, err error) {
 	defer ctx.printTrace(c)()
 	start := ctx.RawCursor()
+	// Presence recorded by captures inside a nested production must be
+	// qualified with the field the production is captured into.
+	var previousPath []string
+	nestedProduction := ctx.presence != nil && c.isCapturedProduction()
+	if nestedProduction {
+		previousPath = ctx.enterField(c.field.Name)
+	}
 	v, err := c.node.Parse(ctx, parent)
+	if nestedProduction {
+		ctx.leaveField(previousPath)
+	}
 	if v != nil {
 		ctx.Defer(ctx.Range(start, ctx.RawCursor()), parent, c.field, v)
 	}

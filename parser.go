@@ -173,11 +173,37 @@ func (p *Parser[G]) ParseFromLexer(lex *lexer.PeekingLexer, options ...ParseOpti
 	for _, option := range options {
 		option(&ctx)
 	}
+	if ctx.presence != nil {
+		if err := enableFieldPresence(&ctx, parseNode); err != nil {
+			return nil, err
+		}
+		// Publish the recorded hits even on failure; the tracker was reset
+		// before parsing, so failed parses do not retain previous-round state.
+		state := ctx.presence
+		defer state.tracker.commit(state.hits)
+	}
 	// If the grammar implements Parseable, use it.
 	if parseable, ok := any(v).(Parseable); ok {
 		return v, p.rootParseable(&ctx, parseable)
 	}
 	return v, p.parseOne(&ctx, parseNode, rv)
+}
+
+// enableFieldPresence initialises presence tracking for a parse, resetting any
+// state from a previous parse. It returns a positioned diagnostic when the
+// root production is itself opaque to the parser, in which case no field
+// captures exist to record.
+func enableFieldPresence(ctx *parseContext, root node) error {
+	state := ctx.presence
+	// Reset first so that even a rejection below clears previous-round state.
+	state.tracker.reset()
+	switch root.(type) {
+	case *parseable, *custom:
+		pos := ctx.Peek().Pos
+		return ctx.DeepestError(Errorf(pos, "field presence tracking is not supported for root production %s: Parseable and ParseTypeWith productions parse themselves and expose no fields to track; parse into a struct grammar that captures the production through an @@ field", root.GoString()))
+	}
+	state.hits = map[string]presenceHit{}
+	return nil
 }
 
 func (p *Parser[G]) setCaseInsensitiveTokens() {
